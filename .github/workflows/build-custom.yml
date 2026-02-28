@@ -1,114 +1,80 @@
-name: Build Custom RustDesk
+name: Build Custom RustDesk (Windows Only)
 
-# 手动触发编译（点一下就能跑）
+# 仅手动触发，避免误编译
 on:
   workflow_dispatch:
 
 jobs:
-  # Windows 版本编译
   build-windows:
     runs-on: windows-2022
     steps:
-      - name: 拉取源码（使用默认master分支，避免版本标签问题）
+      - name: 拉取源码（兼容新版分支）
         uses: actions/checkout@v4
+        with:
+          submodules: recursive  # 关键：拉取源码的子模块，新版必须加
 
-      - name: 替换内网IP和Key（已填好你的信息）
+      - name: 智能替换内网IP和Key（适配新版配置路径）
         run: |
-          (Get-Content src/common.rs) `
-          -replace 'pub const API_SERVER: &str = "https://api.rustdesk.com";', 'pub const API_SERVER: &str = "http://172.17.1.150:21114";' `
-          -replace 'pub const RELAY_SERVER: &str = "rs.rustdesk.com:21116";', 'pub const RELAY_SERVER: &str = "172.17.1.150:21116";' `
-          -replace 'pub const KEY: &str = "";', 'pub const KEY: &str = "ff9LJBs3smFIe2bA74QCdu+zfhFlhjvvRUqUKpX8+hY=";' `
-          | Set-Content src/common.rs -Encoding UTF8
+          # 新版 RustDesk 配置文件路径为 libs/common/src/lib.rs
+          $configPath = "libs/common/src/lib.rs"
+          if (Test-Path $configPath) {
+            (Get-Content $configPath -Encoding UTF8) `
+            -replace 'pub const API_SERVER: &str = "https://api.rustdesk.com";', 'pub const API_SERVER: &str = "http://172.17.1.150:21114";' `
+            -replace 'pub const RELAY_SERVER: &str = "rs.rustdesk.com:21116";', 'pub const RELAY_SERVER: &str = "172.17.1.150:21116";' `
+            -replace 'pub const KEY: &str = "";', 'pub const KEY: &str = "ff9LJBs3smFIe2bA74QCdu+zfhFlhjvvRUqUKpX8+hY=";' `
+            | Set-Content $configPath -Encoding UTF8
+            Write-Host "✅ 成功替换配置文件：$configPath"
+          } else {
+            # 兼容旧版路径
+            $oldConfigPath = "src/common.rs"
+            if (Test-Path $oldConfigPath) {
+              (Get-Content $oldConfigPath -Encoding UTF8) `
+              -replace 'pub const API_SERVER: &str = "https://api.rustdesk.com";', 'pub const API_SERVER: &str = "http://172.17.1.150:21114";' `
+              -replace 'pub const RELAY_SERVER: &str = "rs.rustdesk.com:21116";', 'pub const RELAY_SERVER: &str = "172.17.1.150:21116";' `
+              -replace 'pub const KEY: &str = "";', 'pub const KEY: &str = "ff9LJBs3smFIe2bA74QCdu+zfhFlhjvvRUqUKpX8+hY=";' `
+              | Set-Content $oldConfigPath -Encoding UTF8
+              Write-Host "✅ 成功替换旧版配置文件：$oldConfigPath"
+            } else {
+              Write-Error "❌ 未找到配置文件，编译终止"
+              exit 1
+            }
+          }
 
-      - name: 安装Rust环境
+      - name: 安装 Rust 环境（指定稳定版）
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
           target: x86_64-pc-windows-msvc
 
-      - name: 下载预编译依赖（省时间，增加重试机制）
+      - name: 安装 Windows 编译依赖（解决链接器问题）
         run: |
-          curl -L --retry 3 https://gitee.com/rustdesk/doc.rustdesk.com/releases/download/console/deps.zip -o deps.zip
-          mkdir -p target/debug
-          if (Test-Path "deps.zip") {
-              unzip deps.zip -d target/debug
-          } else {
-              Write-Host "依赖包下载失败，使用备用地址"
-              curl -L --retry 3 https://github.com/rustdesk/doc.rustdesk.com/releases/download/console/deps.zip -o deps.zip
-              unzip deps.zip -d target/debug
-          }
+          rustup component add msvc-tools
+          cargo install cargo-wix --force  # 用于打包 MSI
 
-      - name: 编译Windows版本
+      - name: 编译 Windows 定制版（Cargo 自动下载依赖）
         run: cargo build --release --target x86_64-pc-windows-msvc
+        env:
+          # 加速依赖下载
+          CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
 
-      - name: 打包成MSI安装包
-        run: |
-          cargo install cargo-wix --force
-          cargo wix --release --target x86_64-pc-windows-msvc
+      - name: 打包为 MSI 安装包（客户易安装）
+        run: cargo wix --release --target x86_64-pc-windows-msvc
 
-      - name: 上传Windows安装包
+      - name: 上传编译产物（便携版 + 安装包）
         uses: actions/upload-artifact@v4
         with:
-          name: rustdesk-windows-custom
-          path: target/x86_64-pc-windows-msvc/release/wix/*.msi
+          name: RustDesk-Custom-Windows
+          path: |
+            target/x86_64-pc-windows-msvc/release/rustdesk.exe
+            target/x86_64-pc-windows-msvc/release/wix/*.msi
 
-  # Linux 版本编译
-  build-linux:
-    runs-on: ubuntu-22.04
-    steps:
-      - name: 拉取源码（使用默认master分支）
-        uses: actions/checkout@v4
-
-      - name: 替换内网IP和Key（已填好你的信息）
-        run: |
-          sed -i 's|pub const API_SERVER: &str = "https://api.rustdesk.com";|pub const API_SERVER: &str = "http://172.17.1.150:21114";|g' src/common.rs
-          sed -i 's|pub const RELAY_SERVER: &str = "rs.rustdesk.com:21116";|pub const RELAY_SERVER: &str = "172.17.1.150:21116";|g' src/common.rs
-          sed -i 's|pub const KEY: &str = "";|pub const KEY: &str = "ff9LJBs3smFIe2bA74QCdu+zfhFlhjvvRUqUKpX8+hY=";|g' src/common.rs
-
-      - name: 安装系统依赖
-        run: |
-          sudo apt update && sudo apt install -y build-essential libgtk-3-dev libayatana-appindicator3-dev libssl-dev pkg-config cmake ninja-build libclang-dev
-
-      - name: 安装Rust环境
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: 下载预编译依赖（增加重试）
-        run: |
-          mkdir -p target/debug
-          wget --tries=3 https://gitee.com/rustdesk/doc.rustdesk.com/releases/download/console/deps.tar.gz -O deps.tar.gz || wget --tries=3 https://github.com/rustdesk/doc.rustdesk.com/releases/download/console/deps.tar.gz -O deps.tar.gz
-          if [ -f "deps.tar.gz" ]; then
-              tar xzf deps.tar.gz -C target/debug
-          fi
-
-      - name: 编译Linux版本
-        run: cargo build --release
-
-      - name: 打包成DEB安装包
-        run: |
-          cargo install cargo-deb --force
-          cargo deb --release
-
-      - name: 上传Linux安装包
-        uses: actions/upload-artifact@v4
-        with:
-          name: rustdesk-linux-custom
-          path: target/debian/*.deb
-
-  # 自动发布到Release（方便下载）
-  release:
-    needs: [build-windows, build-linux]
-    runs-on: ubuntu-22.04
-    steps:
-      - name: 下载所有编译好的安装包
-        uses: actions/download-artifact@v4
-
-      - name: 创建Release并上传安装包
+      - name: 自动创建 Release（方便下载）
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: custom-rustdesk-latest
-          name: 定制版RustDesk（内置172.17.1.150）
+          tag_name: custom-windows-latest
+          name: 定制版 RustDesk (Windows) - 内置172.17.1.150
           files: |
-            rustdesk-windows-custom/*.msi
-            rustdesk-linux-custom/*.deb
+            target/x86_64-pc-windows-msvc/release/rustdesk.exe
+            target/x86_64-pc-windows-msvc/release/wix/*.msi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
