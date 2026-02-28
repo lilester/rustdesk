@@ -9,10 +9,8 @@ jobs:
   build-windows:
     runs-on: windows-2022
     steps:
-      - name: 拉取源码（1.2.3稳定版）
+      - name: 拉取源码（使用默认master分支，避免版本标签问题）
         uses: actions/checkout@v4
-        with:
-          ref: 1.2.3
 
       - name: 替换内网IP和Key（已填好你的信息）
         run: |
@@ -28,18 +26,24 @@ jobs:
           toolchain: stable
           target: x86_64-pc-windows-msvc
 
-      - name: 下载预编译依赖（省时间）
+      - name: 下载预编译依赖（省时间，增加重试机制）
         run: |
-          curl -L https://gitee.com/rustdesk/doc.rustdesk.com/releases/download/console/deps.zip -o deps.zip
+          curl -L --retry 3 https://gitee.com/rustdesk/doc.rustdesk.com/releases/download/console/deps.zip -o deps.zip
           mkdir -p target/debug
-          unzip deps.zip -d target/debug
+          if (Test-Path "deps.zip") {
+              unzip deps.zip -d target/debug
+          } else {
+              Write-Host "依赖包下载失败，使用备用地址"
+              curl -L --retry 3 https://github.com/rustdesk/doc.rustdesk.com/releases/download/console/deps.zip -o deps.zip
+              unzip deps.zip -d target/debug
+          }
 
       - name: 编译Windows版本
         run: cargo build --release --target x86_64-pc-windows-msvc
 
       - name: 打包成MSI安装包
         run: |
-          cargo install cargo-wix
+          cargo install cargo-wix --force
           cargo wix --release --target x86_64-pc-windows-msvc
 
       - name: 上传Windows安装包
@@ -52,10 +56,8 @@ jobs:
   build-linux:
     runs-on: ubuntu-22.04
     steps:
-      - name: 拉取源码（1.2.3稳定版）
+      - name: 拉取源码（使用默认master分支）
         uses: actions/checkout@v4
-        with:
-          ref: 1.2.3
 
       - name: 替换内网IP和Key（已填好你的信息）
         run: |
@@ -65,24 +67,25 @@ jobs:
 
       - name: 安装系统依赖
         run: |
-          sudo apt update
-          sudo apt install -y build-essential libgtk-3-dev libayatana-appindicator3-dev libssl-dev pkg-config cmake ninja-build libclang-dev
+          sudo apt update && sudo apt install -y build-essential libgtk-3-dev libayatana-appindicator3-dev libssl-dev pkg-config cmake ninja-build libclang-dev
 
       - name: 安装Rust环境
         uses: dtolnay/rust-toolchain@stable
 
-      - name: 下载预编译依赖（省时间）
+      - name: 下载预编译依赖（增加重试）
         run: |
           mkdir -p target/debug
-          wget https://gitee.com/rustdesk/doc.rustdesk.com/releases/download/console/deps.tar.gz
-          tar xzf deps.tar.gz -C target/debug
+          wget --tries=3 https://gitee.com/rustdesk/doc.rustdesk.com/releases/download/console/deps.tar.gz -O deps.tar.gz || wget --tries=3 https://github.com/rustdesk/doc.rustdesk.com/releases/download/console/deps.tar.gz -O deps.tar.gz
+          if [ -f "deps.tar.gz" ]; then
+              tar xzf deps.tar.gz -C target/debug
+          fi
 
       - name: 编译Linux版本
         run: cargo build --release
 
       - name: 打包成DEB安装包
         run: |
-          cargo install cargo-deb
+          cargo install cargo-deb --force
           cargo deb --release
 
       - name: 上传Linux安装包
@@ -102,7 +105,7 @@ jobs:
       - name: 创建Release并上传安装包
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: custom-rustdesk-1.2.3
+          tag_name: custom-rustdesk-latest
           name: 定制版RustDesk（内置172.17.1.150）
           files: |
             rustdesk-windows-custom/*.msi
